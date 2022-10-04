@@ -1,15 +1,14 @@
 import {Observable, Subscription} from 'rxjs'
-import {DependencyList, useMemo} from 'react'
+import {DependencyList, useEffect, useMemo, useRef} from 'react'
 import {useSyncExternalStore} from 'use-sync-external-store/shim'
 import {shareReplay, tap} from 'rxjs/operators'
-import {useIsomorphicEffect} from './useIsomorphicEffect'
 
 function getValue<T>(value: T): T extends () => infer U ? U : T {
   return typeof value === 'function' ? value() : value
 }
 
 interface CacheRecord<T> {
-  subscription: Subscription
+  subscription?: Subscription
   observable: Observable<T>
   currentValue: T
 }
@@ -48,7 +47,6 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
 
     return [
       function getSnapshot() {
-        console.log('ONE')
         if (strategy === 'C' && initialValue === undefined && !record.subscription) {
           // Sync subscribe and update the initial value when React asks for the first snapshot
           record.subscription = record.observable.subscribe()
@@ -63,7 +61,6 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
         return record.currentValue
       },
       function subscribe(callback: () => void) {
-        console.log('TWO')
         if (
           (strategy === 'B' || strategy === 'D') &&
           record.subscription &&
@@ -81,11 +78,21 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
   }, [observable])
 
   if (strategy === 'A') {
-    useIsomorphicEffect(() => {
-      return () => {
-        getOrCreateStore(observable, getValue(initialValue))!.subscription?.unsubscribe()
+    const shouldRestoreSubscriptionRef = useRef(false)
+    useEffect(() => {
+      const store = getOrCreateStore(observable, getValue(initialValue))!
+      if (shouldRestoreSubscriptionRef.current) {
+        if (store.subscription?.closed) {
+          store.subscription = store.observable.subscribe()
+        }
+        shouldRestoreSubscriptionRef.current = false
       }
-    }, [observable])
+
+      return () => {
+        shouldRestoreSubscriptionRef.current = !store.subscription?.closed
+        store.subscription?.unsubscribe()
+      }
+    }, [observable, initialValue])
   }
 
   return useSyncExternalStore(subscribe, getSnapshot)
