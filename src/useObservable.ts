@@ -1,5 +1,5 @@
 import {Observable, Subscription} from 'rxjs'
-import {DependencyList, useEffect, useMemo, useRef, useState} from 'react'
+import {DependencyList, useMemo} from 'react'
 import {useSyncExternalStore} from 'use-sync-external-store/shim'
 import {shareReplay, tap} from 'rxjs/operators'
 import {useIsomorphicEffect} from './useIsomorphicEffect'
@@ -14,7 +14,7 @@ interface CacheRecord<T> {
   currentValue: T
 }
 
-const strategy: 'A' | 'B' = 'B'
+const strategy: 'A' | 'B' | 'C' | 'D' = 'A'
 
 const cache = new WeakMap<Observable<any>, CacheRecord<any>>()
 function getOrCreateStore<T>(inputObservable: Observable<T>, initialValue: T) {
@@ -25,11 +25,11 @@ function getOrCreateStore<T>(inputObservable: Observable<T>, initialValue: T) {
       tap(value => (entry.currentValue = value)),
     )
 
-    if (strategy === 'A') {
-      entry.subscription = entry.observable.subscribe()
-    } else if (strategy === 'B') {
-      const syncInitialCurrentValue = entry.observable.subscribe()
-      syncInitialCurrentValue.unsubscribe()
+    // Eagerly subscribe to sync set `entry.currentValue` to what the observable return
+    if (strategy === 'A' || strategy === 'B') {
+      if (entry.currentValue === undefined) {
+        entry.subscription = entry.observable.subscribe()
+      }
     }
 
     cache.set(inputObservable, entry as CacheRecord<T>)
@@ -41,20 +41,39 @@ export function useObservable<T>(observable: Observable<T>): T | undefined
 export function useObservable<T>(observable: Observable<T>, initialValue: T): T
 export function useObservable<T>(observable: Observable<T>, initialValue: () => T): T
 export function useObservable<T>(observable: Observable<T>, initialValue?: T | (() => T)) {
-  const [getSnapshot, subscribe] = useMemo(() => {
+  const [getSnapshot, subscribe] = useMemo<
+    [() => T, Parameters<typeof useSyncExternalStore>[0]]
+  >(() => {
     const record = getOrCreateStore(observable, getValue(initialValue))!
+
     return [
       function getSnapshot() {
+        console.log('ONE')
+        if (strategy === 'C' && initialValue === undefined && !record.subscription) {
+          // Sync subscribe and update the initial value when React asks for the first snapshot
+          record.subscription = record.observable.subscribe()
+          // With the initial value set time to unsubscribe
+          record.subscription.unsubscribe()
+        }
+        if (strategy === 'D' && initialValue === undefined && !record.subscription) {
+          // Sync subscribe and update the initial value when React asks for the first snapshot
+          record.subscription = record.observable.subscribe()
+          // The subscription will be closed when the store is subscribed to
+        }
         return record.currentValue
       },
       function subscribe(callback: () => void) {
-        console.count('getOrCreateStore.subscribe')
-        const sub = record.observable.subscribe(
-          // @ts-ignore
-          strategy === 'A' ? next => callback(next) : callback,
-        )
+        console.log('TWO')
+        if (
+          (strategy === 'B' || strategy === 'D') &&
+          record.subscription &&
+          !record.subscription.closed
+        ) {
+          record.subscription.unsubscribe()
+        }
+        // record.subscription.unsubscribe()
+        const sub = record.observable.subscribe(() => callback())
         return () => {
-          console.count('getOrCreateStore.unsubscribe')
           sub.unsubscribe()
         }
       },
@@ -64,7 +83,7 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
   if (strategy === 'A') {
     useIsomorphicEffect(() => {
       return () => {
-        getOrCreateStore(observable, getValue(initialValue))!.subscription.unsubscribe()
+        getOrCreateStore(observable, getValue(initialValue))!.subscription?.unsubscribe()
       }
     }, [observable])
   }
