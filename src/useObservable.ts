@@ -42,7 +42,6 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
     [() => T, Parameters<typeof useSyncExternalStore>[0]]
   >(() => {
     const record = getOrCreateStore(observable, getValue(initialValue))!
-
     return [
       function getSnapshot() {
         // @TODO: perf opt opportunity: we could do `record.subscription.unsubscribe()` here to clear up some memory, as this subscription is only needed to provide a sync initialValue.
@@ -74,7 +73,7 @@ export function useObservable<T>(observable: Observable<T>, initialValue?: T | (
       shouldRestoreSubscriptionRef.current = !store.subscription.closed
       store.subscription.unsubscribe()
     }
-  }, [observable, initialValue])
+  }, [observable])
 
   return useSyncExternalStore(subscribe, getSnapshot)
 }
